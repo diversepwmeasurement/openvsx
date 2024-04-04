@@ -1,93 +1,115 @@
-name: Sonar
-on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
 jobs:
   sonar:
-    name: Sonar
-    runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
+    name: Sonar
+    runs-on: self-hosted
     steps:
-    - name: Download PR number artifact
+    - continue-on-error: true
       if: github.event.workflow_run.event == 'pull_request'
+      name: Download PR number artifact
       uses: dawidd6/action-download-artifact@v2
       with:
-        workflow: CI
-        run_id: ${{ github.event.workflow_run.id }}
         name: PR_NUMBER
-    - name: Read PR_NUMBER.txt
-      if: github.event.workflow_run.event == 'pull_request'
+        run_id: ${{ github.event.workflow_run.id }}
+        workflow: CI
+    - continue-on-error: true
       id: pr_number
+      if: github.event.workflow_run.event == 'pull_request'
+      name: Read PR_NUMBER.txt
       uses: juliangruber/read-file-action@v1
       with:
         path: ./PR_NUMBER.txt
-    - name: Request GitHub API for PR data
-      if: github.event.workflow_run.event == 'pull_request'
-      uses: octokit/request-action@v2.x
-      id: get_pr_data
-      with:
-        route: GET /repos/{full_name}/pulls/{number}
-        number: ${{ steps.pr_number.outputs.content }}
-        full_name: ${{ github.event.repository.full_name }}
+    - continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - uses: actions/checkout@v3
-      with:
-          repository: ${{ github.event.workflow_run.head_repository.full_name }}
-          ref: ${{ github.event.workflow_run.head_branch }}
-          fetch-depth: 0
-    - name: Checkout base branch
+      id: get_pr_data
       if: github.event.workflow_run.event == 'pull_request'
+      name: Request GitHub API for PR data
+      uses: octokit/request-action@v2.x
+      with:
+        full_name: ${{ github.event.repository.full_name }}
+        number: ${{ steps.pr_number.outputs.content }}
+        route: GET /repos/{full_name}/pulls/{number}
+    - continue-on-error: true
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.workflow_run.head_branch }}
+        repository: ${{ github.event.workflow_run.head_repository.full_name }}
+    - continue-on-error: true
       env:
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-      run: |
-        git remote add upstream ${{ github.event.repository.clone_url }}
+      if: github.event.workflow_run.event == 'pull_request'
+      name: Checkout base branch
+      run: 'git remote add upstream ${{ github.event.repository.clone_url }}
+
         git fetch upstream
-        git checkout -B ${{ fromJson(steps.get_pr_data.outputs.data).base.ref }} upstream/${{ fromJson(steps.get_pr_data.outputs.data).base.ref }}
+
+        git checkout -B ${{ fromJson(steps.get_pr_data.outputs.data).base.ref }} upstream/${{
+        fromJson(steps.get_pr_data.outputs.data).base.ref }}
+
         git checkout $HEAD_BRANCH
+
         git clean -ffdx && git reset --hard HEAD
-    - name: Cache SonarCloud packages
+
+        '
+    - continue-on-error: true
+      name: Cache SonarCloud packages
       uses: actions/cache@v3
       with:
-        path: ~/.sonar/cache
         key: ${{ runner.os }}-sonar
+        path: ~/.sonar/cache
         restore-keys: ${{ runner.os }}-sonar
-    - name: Cache Gradle packages
+    - continue-on-error: true
+      name: Cache Gradle packages
       uses: actions/cache@v3
       with:
-        path: ~/.gradle/caches
         key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+        path: ~/.gradle/caches
         restore-keys: ${{ runner.os }}-gradle
-    - name: Set up JDK
+    - continue-on-error: true
+      name: Set up JDK
       uses: actions/setup-java@v1
       with:
         java-version: 17
-    - name: Generate JaCoCo test report
+    - continue-on-error: true
+      name: Generate JaCoCo test report
       run: server/gradlew --no-daemon -p server jacocoTestReport
-    - name: Make server libraries directory
+    - continue-on-error: true
+      name: Make server libraries directory
       run: mkdir server/libraries
-    - name: Copy server libraries
-      run: find ~/.gradle/caches -type f -name '*.jar' -exec cp {} server/libraries \;
-    - name: SonarCloud Scan on PR
+    - continue-on-error: true
+      name: Copy server libraries
+      run: find ~/.gradle/caches -type f -name '*.jar' -exec cp {} server/libraries
+        \;
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       if: github.event.workflow_run.event == 'pull_request'
+      name: SonarCloud Scan on PR
       uses: sonarsource/sonarcloud-github-action@master
+      with:
+        args: '-Dsonar.scm.revision=${{ github.event.workflow_run.head_sha }} -Dsonar.pullrequest.key=${{
+          fromJson(steps.get_pr_data.outputs.data).number }} -Dsonar.pullrequest.branch=${{
+          fromJson(steps.get_pr_data.outputs.data).head.ref }} -Dsonar.pullrequest.base=${{
+          fromJson(steps.get_pr_data.outputs.data).base.ref }}
+
+          '
+    - continue-on-error: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      with:
-        args: >
-          -Dsonar.scm.revision=${{ github.event.workflow_run.head_sha }}
-          -Dsonar.pullrequest.key=${{ fromJson(steps.get_pr_data.outputs.data).number }}
-          -Dsonar.pullrequest.branch=${{ fromJson(steps.get_pr_data.outputs.data).head.ref }}
-          -Dsonar.pullrequest.base=${{ fromJson(steps.get_pr_data.outputs.data).base.ref }}
-    - name: SonarCloud Scan on push
-      if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.event.repository.full_name
+      if: github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name
+        == github.event.repository.full_name
+      name: SonarCloud Scan on push
       uses: sonarsource/sonarcloud-github-action@master
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       with:
-        args: >
-          -Dsonar.scm.revision=${{ github.event.workflow_run.head_sha }}
-          -Dsonar.branch.name=${{ github.event.workflow_run.head_branch }}
+        args: '-Dsonar.scm.revision=${{ github.event.workflow_run.head_sha }} -Dsonar.branch.name=${{
+          github.event.workflow_run.head_branch }}
+
+          '
+name: Sonar
+on:
+  repository_dispatch:
+    types: trigger-ga___sonar.yml
